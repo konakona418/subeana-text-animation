@@ -22,8 +22,10 @@ static Font*     default_font;
 
 #define FONT_FILE "NotoSansJP-Regular.ttf"
 
+#define DEBUG
+
 // text spacing
-static const int   s_spacing           = 4;
+static const int   s_spacing           = 2;
 static const float s_scatter_magnitude = 300.f;
 static const float gravity             = 5.f;
 static const int   s_bloom_levels      = 4;
@@ -285,9 +287,19 @@ GlyphEntity* CreateGlyphEntitiesForText(b2WorldId world, Utf32SV text, b2BodyTyp
 
   float offset_x = 0;
   for (size_t i = 0; i < text.length; ++i) {
-    int code_point = text.codepoints[i];
-    entities[i]    = CreateGlyphEntity(world, code_point, type, x + offset_x, y);
-    offset_x += entities[i].metrics.x + s_spacing;
+    int       code_point = text.codepoints[i];
+    GlyphInfo info       = GetGlyphInfo(*default_font, code_point);
+    float     advance    = (float) info.advanceX;
+
+    entities[i].glyph_index = code_point;
+    entities[i].metrics     = (Vector2){advance, default_font->baseSize};
+    entities[i].body_id     = b2_nullBodyId;
+
+    if ((code_point != ' ') && (code_point != '\t') && (code_point != 0x3000)) {
+      entities[i] = CreateGlyphEntity(world, code_point, type, x + offset_x, y);
+    }
+
+    offset_x += advance + s_spacing;
   }
 
   return entities;
@@ -299,13 +311,19 @@ void FreeGlyphEntities(GlyphEntity* entities, size_t count) {
   }
 
   for (size_t i = 0; i < count; ++i) {
-    b2DestroyBody(entities[i].body_id);
+    if (!B2_IS_NULL(entities[i].body_id)) {
+      b2DestroyBody(entities[i].body_id);
+    }
   }
   MemFree(entities);
 }
 
 void ScatterGlyphEntities(GlyphEntity* entities, size_t count, float magnitude) {
   for (size_t i = 0; i < count; ++i) {
+    if (B2_IS_NULL(entities[i].body_id)) {
+      continue;
+    }
+
     float  angle   = (float) rand() / RAND_MAX * 2.f * B2_PI;
     float  force   = (float) rand() / RAND_MAX * magnitude;
     b2Vec2 impulse = {cosf(angle) * force, sinf(angle) * force};
@@ -549,9 +567,13 @@ void DrawAnim(Utf32SV text) {
     for (size_t i = 0; i < line_count - 1; ++i) {
       for (size_t j = 0; j < lines[i + 1].length; ++j) {
         GlyphEntity entity = glyph_entities[i][j];
-        b2Vec2      pos    = b2Body_GetPosition(entity.body_id);
-        b2Rot       rot    = b2Body_GetRotation(entity.body_id);
-        float       angle  = atan2f(rot.s, rot.c);
+        if (B2_IS_NULL(entity.body_id)) {
+          continue;
+        }
+
+        b2Vec2 pos   = b2Body_GetPosition(entity.body_id);
+        b2Rot  rot   = b2Body_GetRotation(entity.body_id);
+        float  angle = atan2f(rot.s, rot.c);
 
         DrawTextCodepointSlugPro(
           slug_font,
