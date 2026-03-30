@@ -395,6 +395,11 @@ void DrawAnim(Utf32SV text) {
   CompoundGlyphEntity compound_entity;
   int                 line_width;
   int                 y_offset;
+  float               view_scale     = 1.0f;
+  Vector2             view_offset    = {0.0f, 0.0f};
+  bool                is_panning     = false;
+  Vector2             last_mouse_pos = {0.0f, 0.0f};
+  bool                bloom_enabled  = true;
 
   glyph_entities = NULL;
 
@@ -463,10 +468,60 @@ void DrawAnim(Utf32SV text) {
   }
 
   while (!WindowShouldClose()) {
+    float wheel = GetMouseWheelMove();
+    if (wheel != 0.0f) {
+      Vector2 mouse_pos  = GetMousePosition();
+      float   old_scale  = view_scale;
+      float   zoom_scale = powf(1.1f, wheel);
+      float   new_scale  = Clamp(old_scale * zoom_scale, 0.1f, 16.0f);
+
+      if (new_scale != old_scale) {
+        Vector2 world_pos_under_mouse = {
+          (mouse_pos.x - view_offset.x) / old_scale,
+          (mouse_pos.y - view_offset.y) / old_scale,
+        };
+
+        view_scale  = new_scale;
+        view_offset = (Vector2){
+          mouse_pos.x - world_pos_under_mouse.x * view_scale,
+          mouse_pos.y - world_pos_under_mouse.y * view_scale,
+        };
+      }
+    }
+
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      is_panning     = true;
+      last_mouse_pos = GetMousePosition();
+    }
+
+    if (is_panning && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+      Vector2 current_mouse_pos = GetMousePosition();
+      Vector2 delta             = Vector2Subtract(current_mouse_pos, last_mouse_pos);
+      view_offset               = Vector2Add(view_offset, delta);
+      last_mouse_pos            = current_mouse_pos;
+    }
+
+    if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {
+      is_panning = false;
+    }
+
+    if (IsKeyPressed(KEY_ZERO)) {
+      view_scale  = 1.0f;
+      view_offset = (Vector2){0.0f, 0.0f};
+    }
+
+    if (IsKeyPressed(KEY_SPACE)) {
+      bloom_enabled = !bloom_enabled;
+    }
+
     BeginTextureMode(render_texture);
     ClearBackground(BLACK);
 
     b2World_Step(world, 1 / 60.f, 4);
+
+    rlPushMatrix();
+    rlTranslatef(view_offset.x, view_offset.y, 0.0f);
+    rlScalef(view_scale, view_scale, 1.0f);
 
     b2Vec2  position = b2Body_GetPosition(compound_entity.body_id);
     Vector2 pos      = {(float) position.x, (float) position.y};
@@ -524,7 +579,7 @@ void DrawAnim(Utf32SV text) {
       }
     }
 
-    if (IsKeyPressed(KEY_SPACE)) {
+    if (IsKeyPressed(KEY_ENTER)) {
       for (size_t i = 0; i < line_count - 1; ++i) {
         FreeGlyphEntities(glyph_entities[i], lines[i + 1].length);
       }
@@ -549,17 +604,21 @@ void DrawAnim(Utf32SV text) {
       }
     }
 
+    rlPopMatrix();
+
     EndTextureMode();
 
-    RenderBloomPass(
-      render_texture,
-      bloom_textures,
-      bloom_widths,
-      bloom_heights,
-      s_bloom_levels,
-      downsample_shader,
-      upsample_shader,
-      downsample_texel_loc);
+    if (bloom_enabled) {
+      RenderBloomPass(
+        render_texture,
+        bloom_textures,
+        bloom_widths,
+        bloom_heights,
+        s_bloom_levels,
+        downsample_shader,
+        upsample_shader,
+        downsample_texel_loc);
+    }
 
     BeginDrawing();
     ClearBackground(BLACK);
@@ -570,15 +629,17 @@ void DrawAnim(Utf32SV text) {
       (Vector2){0.0f, 0.0f},
       WHITE);
 
-    BeginBlendMode(BLEND_ADDITIVE);
-    DrawTexturePro(
-      bloom_textures[0].texture,
-      (Rectangle){0.0f, 0.0f, (float) bloom_widths[0], (float) -bloom_heights[0]},
-      (Rectangle){0.0f, 0.0f, (float) screen_width, (float) screen_height},
-      (Vector2){0.0f, 0.0f},
-      0.0f,
-      (Color){255, 255, 255, (unsigned char) (255.0f * s_bloom_strength)});
-    EndBlendMode();
+    if (bloom_enabled) {
+      BeginBlendMode(BLEND_ADDITIVE);
+      DrawTexturePro(
+        bloom_textures[0].texture,
+        (Rectangle){0.0f, 0.0f, (float) bloom_widths[0], (float) -bloom_heights[0]},
+        (Rectangle){0.0f, 0.0f, (float) screen_width, (float) screen_height},
+        (Vector2){0.0f, 0.0f},
+        0.0f,
+        (Color){255, 255, 255, (unsigned char) (255.0f * s_bloom_strength)});
+      EndBlendMode();
+    }
 
     EndDrawing();
   }
