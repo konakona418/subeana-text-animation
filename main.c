@@ -22,14 +22,16 @@ static Font*     default_font;
 
 #define FONT_FILE "NotoSansJP-Regular.ttf"
 
-#define DEBUG
-
 // text spacing
 static const int   s_spacing           = 2;
-static const float s_scatter_magnitude = 300.f;
-static const float gravity             = 5.f;
+static const float s_fontsize          = 32.0f;
+static const float s_scatter_magnitude = 0.0f;
+static const float s_gravity           = 9.8f;
+static const float s_pixels_per_meter  = 64.0f;
 static const int   s_bloom_levels      = 4;
 static const float s_bloom_strength    = 0.8f;
+static const bool  s_real_sban_style   = true;
+static const float s_sban_kanji_scale  = 1.2f;
 
 static const char s_bloom_downsample_shader[] =
   "#version 330 core\n"
@@ -209,14 +211,113 @@ size_t SplitUTF8IntoLines(Utf32SV text, Utf32SV* out_lines) {
 
 void InitPhysics() {
   b2WorldDef world_def = b2DefaultWorldDef();
-  world_def.gravity    = (b2Vec2){0, gravity};
+  world_def.gravity    = (b2Vec2){0, s_gravity};
   world                = b2CreateWorld(&world_def);
+}
+
+Vector2 WorldToScreenVec2(b2Vec2 world_position) {
+  return (Vector2){world_position.x * s_pixels_per_meter, world_position.y * s_pixels_per_meter};
+}
+
+b2Vec2 ScreenToWorldVec2(Vector2 screen_position) {
+  return (b2Vec2){screen_position.x / s_pixels_per_meter, screen_position.y / s_pixels_per_meter};
+}
+
+bool IsKanaCodepoint(int codepoint) {
+  return ((codepoint >= 0x3040) && (codepoint <= 0x309F)) ||
+         ((codepoint >= 0x30A0) && (codepoint <= 0x30FF)) ||
+         ((codepoint >= 0x31F0) && (codepoint <= 0x31FF)) ||
+         ((codepoint >= 0xFF66) && (codepoint <= 0xFF9D));
+}
+
+bool IsKanjiCodepoint(int codepoint) {
+  return ((codepoint >= 0x3400) && (codepoint <= 0x4DBF)) ||
+         ((codepoint >= 0x4E00) && (codepoint <= 0x9FFF)) ||
+         ((codepoint >= 0xF900) && (codepoint <= 0xFAFF)) ||
+         ((codepoint >= 0x20000) && (codepoint <= 0x2A6DF)) ||
+         ((codepoint >= 0x2A700) && (codepoint <= 0x2B73F)) ||
+         ((codepoint >= 0x2B740) && (codepoint <= 0x2B81F)) ||
+         ((codepoint >= 0x2B820) && (codepoint <= 0x2CEAF)) ||
+         ((codepoint >= 0x2CEB0) && (codepoint <= 0x2EBEF)) ||
+         ((codepoint >= 0x30000) && (codepoint <= 0x3134F));
+}
+
+bool IsWhitespaceCodepoint(int codepoint) {
+  return (codepoint == ' ') || (codepoint == '\t') || (codepoint == 0x3000);
+}
+
+float GetStyledCodepointFontSize(Font font, int codepoint) {
+  float base_font_size = (float) font.baseSize;
+
+  if (!s_real_sban_style) {
+    return base_font_size;
+  }
+
+  if (IsKanjiCodepoint(codepoint)) {
+    return base_font_size * s_sban_kanji_scale;
+  }
+
+  return base_font_size;
+}
+
+float GetStyledCodepointAdvance(Font font, int codepoint, float font_size) {
+  GlyphInfo glyph = GetGlyphInfo(font, codepoint);
+  Rectangle rec   = GetGlyphAtlasRec(font, codepoint);
+  float     scale = font_size / (float) font.baseSize;
+
+  if (glyph.advanceX > 0) {
+    return glyph.advanceX * scale;
+  }
+
+  return rec.width * scale;
+}
+
+Vector2 MeasureStyledUtf32SV(Font font, Utf32SV text) {
+  Vector2 metrics = {0.0f, (float) font.baseSize};
+
+  for (size_t i = 0; i < text.length; ++i) {
+    int   codepoint = text.codepoints[i];
+    float font_size = GetStyledCodepointFontSize(font, codepoint);
+    float advance   = GetStyledCodepointAdvance(font, codepoint, font_size);
+
+    metrics.x += advance + s_spacing;
+    if (font_size > metrics.y) {
+      metrics.y = font_size;
+    }
+  }
+
+  return metrics;
+}
+
+void DrawTextCodepointsSlugStyled(PSlugFont font, Utf32SV text, Vector2 position, float line_height, Color tint) {
+  float text_offset_x = 0.0f;
+
+  for (size_t i = 0; i < text.length; ++i) {
+    int   codepoint = text.codepoints[i];
+    float font_size = GetStyledCodepointFontSize(*default_font, codepoint);
+    float advance   = GetStyledCodepointAdvance(*default_font, codepoint, font_size);
+    float glyph_y   = position.y + (line_height - font_size);
+
+    if (!IsWhitespaceCodepoint(codepoint)) {
+      DrawTextCodepointSlugPro(
+        font,
+        codepoint,
+        (Vector2){position.x + text_offset_x, glyph_y},
+        (Vector2){0.0f, 0.0f},
+        0.0f,
+        font_size,
+        tint);
+    }
+
+    text_offset_x += advance + s_spacing;
+  }
 }
 
 typedef struct GlyphEntity {
   int      glyph_index;
   b2BodyId body_id;
   Vector2  metrics;
+  float    font_size;
 } GlyphEntity;
 
 typedef struct CompoundGlyphEntity {
@@ -233,10 +334,10 @@ b2BodyId CreateRectBody(b2WorldId world, b2BodyType type, b2Vec2 position, float
 
   body_def          = b2DefaultBodyDef();
   body_def.type     = type;
-  body_def.position = position;
+  body_def.position = ScreenToWorldVec2((Vector2){position.x, position.y});
   body_id           = b2CreateBody(world, &body_def);
 
-  poly      = b2MakeBox(width / 2, height / 2);
+  poly      = b2MakeBox((width / s_pixels_per_meter) / 2.0f, (height / s_pixels_per_meter) / 2.0f);
   shape_def = b2DefaultShapeDef();
   b2CreatePolygonShape(body_id, &shape_def, &poly);
 
@@ -246,15 +347,42 @@ b2BodyId CreateRectBody(b2WorldId world, b2BodyType type, b2Vec2 position, float
 CompoundGlyphEntity CreateCompoundGlyphEntity(b2WorldId world, Utf32SV text, b2BodyType type, float x, float y) {
   CompoundGlyphEntity entity;
   Vector2             metrics;
-  char*               utf8_buffer;
+  b2BodyDef           body_def;
+  b2ShapeDef          shape_def;
+  float               text_offset_x = 0.0f;
 
-  utf8_buffer    = LoadUTF8(text.codepoints, text.length);
-  metrics        = MeasureTextEx(*default_font, utf8_buffer, default_font->baseSize, s_spacing);
+  metrics        = MeasureStyledUtf32SV(*default_font, text);
   entity.text    = text;
-  entity.body_id = CreateRectBody(world, type, (b2Vec2){x, y}, metrics.x, metrics.y);
   entity.metrics = metrics;
 
-  UnloadUTF8(utf8_buffer);
+  body_def          = b2DefaultBodyDef();
+  body_def.type     = type;
+  body_def.position = ScreenToWorldVec2((Vector2){x, y});
+  entity.body_id    = b2CreateBody(world, &body_def);
+
+  shape_def = b2DefaultShapeDef();
+
+  for (size_t i = 0; i < text.length; ++i) {
+    int   codepoint   = text.codepoints[i];
+    float font_size   = GetStyledCodepointFontSize(*default_font, codepoint);
+    float glyph_width = GetStyledCodepointAdvance(*default_font, codepoint, font_size);
+
+    if (!IsWhitespaceCodepoint(codepoint)) {
+      float local_center_x = -metrics.x * 0.5f + text_offset_x + glyph_width * 0.5f;
+      float local_center_y = metrics.y * 0.5f - font_size * 0.5f;
+
+      b2Polygon glyph_box = b2MakeOffsetBox(
+        (glyph_width / s_pixels_per_meter) * 0.5f,
+        (font_size / s_pixels_per_meter) * 0.5f,
+        ScreenToWorldVec2((Vector2){local_center_x, local_center_y}),
+        b2MakeRot(0.0f));
+
+      b2CreatePolygonShape(entity.body_id, &shape_def, &glyph_box);
+    }
+
+    text_offset_x += glyph_width + s_spacing;
+  }
+
   return entity;
 }
 
@@ -266,14 +394,14 @@ void FreeCompoundGlyphEntity(CompoundGlyphEntity* entity) {
   b2DestroyBody(entity->body_id);
 }
 
-GlyphEntity CreateGlyphEntity(b2WorldId world, int code_point, b2BodyType type, float x, float y) {
+GlyphEntity CreateGlyphEntity(b2WorldId world, int code_point, b2BodyType type, float x, float y, float font_size) {
   GlyphEntity entity;
-  GlyphInfo   metrics;
+  float       advance = GetStyledCodepointAdvance(*default_font, code_point, font_size);
 
-  metrics            = GetGlyphInfo(*default_font, code_point);
   entity.glyph_index = code_point;
-  entity.body_id     = CreateRectBody(world, type, (b2Vec2){x, y}, metrics.advanceX, default_font->baseSize);
-  entity.metrics     = (Vector2){metrics.advanceX, default_font->baseSize};
+  entity.body_id     = CreateRectBody(world, type, (b2Vec2){x, y}, advance, font_size);
+  entity.metrics     = (Vector2){advance, font_size};
+  entity.font_size   = font_size;
 
   return entity;
 }
@@ -287,16 +415,18 @@ GlyphEntity* CreateGlyphEntitiesForText(b2WorldId world, Utf32SV text, b2BodyTyp
 
   float offset_x = 0;
   for (size_t i = 0; i < text.length; ++i) {
-    int       code_point = text.codepoints[i];
-    GlyphInfo info       = GetGlyphInfo(*default_font, code_point);
-    float     advance    = (float) info.advanceX;
+    int   code_point = text.codepoints[i];
+    float font_size  = GetStyledCodepointFontSize(*default_font, code_point);
+    float advance    = GetStyledCodepointAdvance(*default_font, code_point, font_size);
 
     entities[i].glyph_index = code_point;
-    entities[i].metrics     = (Vector2){advance, default_font->baseSize};
+    entities[i].metrics     = (Vector2){advance, font_size};
+    entities[i].font_size   = font_size;
     entities[i].body_id     = b2_nullBodyId;
 
-    if ((code_point != ' ') && (code_point != '\t') && (code_point != 0x3000)) {
-      entities[i] = CreateGlyphEntity(world, code_point, type, x + offset_x, y);
+    if (!IsWhitespaceCodepoint(code_point)) {
+      float body_y = y + ((float) default_font->baseSize - font_size) * 0.5f;
+      entities[i]  = CreateGlyphEntity(world, code_point, type, x + offset_x, body_y, font_size);
     }
 
     offset_x += advance + s_spacing;
@@ -325,7 +455,7 @@ void ScatterGlyphEntities(GlyphEntity* entities, size_t count, float magnitude) 
     }
 
     float  angle   = (float) rand() / RAND_MAX * 2.f * B2_PI;
-    float  force   = (float) rand() / RAND_MAX * magnitude;
+    float  force   = ((float) rand() / RAND_MAX * magnitude) / s_pixels_per_meter;
     b2Vec2 impulse = {cosf(angle) * force, sinf(angle) * force};
     b2Body_ApplyLinearImpulse(entities[i].body_id, impulse, (b2Vec2){0, 0}, true);
   }
@@ -334,8 +464,8 @@ void ScatterGlyphEntities(GlyphEntity* entities, size_t count, float magnitude) 
 int MeasureUtf32SVWidth(Font font, Utf32SV text) {
   int width = 0;
   for (size_t i = 0; i < text.length; ++i) {
-    GlyphInfo info = GetGlyphInfo(font, text.codepoints[i]);
-    width += info.advanceX + s_spacing;
+    float font_size = GetStyledCodepointFontSize(font, text.codepoints[i]);
+    width += (int) (GetStyledCodepointAdvance(font, text.codepoints[i], font_size) + s_spacing);
   }
   return width;
 }
@@ -395,8 +525,8 @@ void RenderBloomPass(
 GlyphEntity** glyph_entities;
 
 void DrawAnim(Utf32SV text) {
-  const int           screen_width         = 800;
-  const int           screen_height        = 600;
+  const int           screen_width         = 1280;
+  const int           screen_height        = 720;
   Font                font                 = {0};
   PSlugFont           slug_font            = NULL;
   RenderTexture       render_texture       = {0};
@@ -453,7 +583,7 @@ void DrawAnim(Utf32SV text) {
 
   font = LoadFontEx(
     FONT_FILE,
-    32,
+    s_fontsize,
     text.codepoints,
     text.length);
   default_font = &font;
@@ -484,6 +614,8 @@ void DrawAnim(Utf32SV text) {
     }
     ScatterGlyphEntities(glyph_entities[i], lines[i + 1].length, s_scatter_magnitude);
   }
+
+  SetTargetFPS(60);
 
   while (!WindowShouldClose()) {
     float wheel = GetMouseWheelMove();
@@ -542,14 +674,12 @@ void DrawAnim(Utf32SV text) {
     rlScalef(view_scale, view_scale, 1.0f);
 
     b2Vec2  position = b2Body_GetPosition(compound_entity.body_id);
-    Vector2 pos      = {(float) position.x, (float) position.y};
-    DrawTextCodepointsSlug(
+    Vector2 pos      = WorldToScreenVec2(position);
+    DrawTextCodepointsSlugStyled(
       slug_font,
-      compound_entity.text.codepoints,
-      compound_entity.text.length,
+      compound_entity.text,
       Vector2Subtract(pos, (Vector2){compound_entity.metrics.x / 2.f, compound_entity.metrics.y / 2.f}),
-      font.baseSize,
-      s_spacing,
+      compound_entity.metrics.y,
       WHITE);
 
 #ifdef DEBUG
@@ -571,17 +701,18 @@ void DrawAnim(Utf32SV text) {
           continue;
         }
 
-        b2Vec2 pos   = b2Body_GetPosition(entity.body_id);
-        b2Rot  rot   = b2Body_GetRotation(entity.body_id);
-        float  angle = atan2f(rot.s, rot.c);
+        b2Vec2  pos_w = b2Body_GetPosition(entity.body_id);
+        Vector2 pos   = WorldToScreenVec2(pos_w);
+        b2Rot   rot   = b2Body_GetRotation(entity.body_id);
+        float   angle = atan2f(rot.s, rot.c);
 
         DrawTextCodepointSlugPro(
           slug_font,
           entity.glyph_index,
-          (Vector2){pos.x, pos.y},
+          pos,
           (Vector2){entity.metrics.x / 2.f, entity.metrics.y / 2.f},
           angle * RAD2DEG,
-          font.baseSize,
+          entity.font_size,
           WHITE);
 
 #ifdef DEBUG
