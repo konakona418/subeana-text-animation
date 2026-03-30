@@ -548,6 +548,8 @@ void DrawAnim(Utf32SV text) {
   bool                is_panning     = false;
   Vector2             last_mouse_pos = {0.0f, 0.0f};
   bool                bloom_enabled  = true;
+  bool                running        = true;
+  bool                debug_mode     = false;
 
   glyph_entities = NULL;
 
@@ -660,14 +662,24 @@ void DrawAnim(Utf32SV text) {
       view_offset = (Vector2){0.0f, 0.0f};
     }
 
-    if (IsKeyPressed(KEY_SPACE)) {
+    if (IsKeyPressed(KEY_F2)) {
       bloom_enabled = !bloom_enabled;
+    }
+
+    if (IsKeyPressed(KEY_F1)) {
+      debug_mode = !debug_mode;
+    }
+
+    if (IsKeyPressed(KEY_SPACE)) {
+      running = !running;
     }
 
     BeginTextureMode(render_texture);
     ClearBackground(BLACK);
 
-    b2World_Step(world, 1 / 60.f, 4);
+    if (running) {
+      b2World_Step(world, 1 / 60.f, 4);
+    }
 
     rlPushMatrix();
     rlTranslatef(view_offset.x, view_offset.y, 0.0f);
@@ -682,17 +694,18 @@ void DrawAnim(Utf32SV text) {
       compound_entity.metrics.y,
       WHITE);
 
-#ifdef DEBUG
-    DrawRectangleLinesEx(
-      (Rectangle){
-        .x      = pos.x - compound_entity.metrics.x / 2.f,
-        .y      = pos.y - compound_entity.metrics.y / 2.f,
-        .width  = compound_entity.metrics.x,
-        .height = compound_entity.metrics.y,
-      },
-      2,
-      RED);
-#endif
+
+    if (debug_mode) {
+      DrawRectangleLinesEx(
+        (Rectangle){
+          .x      = pos.x - compound_entity.metrics.x / 2.f,
+          .y      = pos.y - compound_entity.metrics.y / 2.f,
+          .width  = compound_entity.metrics.x,
+          .height = compound_entity.metrics.y,
+        },
+        2,
+        RED);
+    }
 
     for (size_t i = 0; i < line_count - 1; ++i) {
       for (size_t j = 0; j < lines[i + 1].length; ++j) {
@@ -715,20 +728,20 @@ void DrawAnim(Utf32SV text) {
           entity.font_size,
           WHITE);
 
-#ifdef DEBUG
-        rlPushMatrix();
-        rlTranslatef(pos.x, pos.y, 0.0f);
-        rlRotatef(angle * RAD2DEG, 0.0f, 0.0f, 1.0f);
-        DrawRectangleLinesEx(
-          (Rectangle){
-            .x      = -entity.metrics.x / 2.f,
-            .y      = -entity.metrics.y / 2.f,
-            .width  = entity.metrics.x,
-            .height = entity.metrics.y,
-          },
-          1, BLUE);
-        rlPopMatrix();
-#endif
+        if (debug_mode) {
+          rlPushMatrix();
+          rlTranslatef(pos.x, pos.y, 0.0f);
+          rlRotatef(angle * RAD2DEG, 0.0f, 0.0f, 1.0f);
+          DrawRectangleLinesEx(
+            (Rectangle){
+              .x      = -entity.metrics.x / 2.f,
+              .y      = -entity.metrics.y / 2.f,
+              .width  = entity.metrics.x,
+              .height = entity.metrics.y,
+            },
+            1, BLUE);
+          rlPopMatrix();
+        }
       }
     }
 
