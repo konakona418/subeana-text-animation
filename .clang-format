@@ -36,10 +36,10 @@ CompactNamespaces: false
 DerivePointerAlignment: false
 PointerAlignment: Left
 ReferenceAlignment: Left
-ContinuationIndentWidth: 8
+ContinuationIndentWidth: 2
 IndentCaseLabels: true
 IndentPPDirectives: None
-IndentWidth: 4
+IndentWidth: 2
 KeepEmptyLinesAtTheStartOfBlocks: true
 MaxEmptyLinesToKeep: 2
 NamespaceIndentation: All
@@ -62,7 +62,7 @@ SpacesInCStyleCastParentheses: false
 SpacesInContainerLiterals: false
 SpacesInParentheses: false
 SpacesInSquareBrackets: false
-TabWidth: 4
+TabWidth: 2
 UseTab: Never
 AlignConsecutiveAssignments:
   Enabled: true
