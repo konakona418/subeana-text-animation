@@ -9,14 +9,6 @@
 
 #include <slug.h>
 
-#ifndef MemAlloc
-#define MemAlloc(size) malloc(size)
-#endif
-
-#ifndef MemFree
-#define MemFree(ptr) free(ptr)
-#endif
-
 static b2WorldId world;
 static Font*     default_font;
 
@@ -32,6 +24,7 @@ static const int   s_bloom_levels      = 4;
 static const float s_bloom_strength    = 0.8f;
 static const bool  s_real_sban_style   = true;
 static const float s_sban_kanji_scale  = 1.2f;
+static const float s_gravity_gun_force = 10.0f;
 
 static const char s_bloom_downsample_shader[] =
   "#version 330 core\n"
@@ -221,6 +214,13 @@ Vector2 WorldToScreenVec2(b2Vec2 world_position) {
 
 b2Vec2 ScreenToWorldVec2(Vector2 screen_position) {
   return (b2Vec2){screen_position.x / s_pixels_per_meter, screen_position.y / s_pixels_per_meter};
+}
+
+Vector2 ScreenToViewVec2(Vector2 screen_position, Vector2 view_offset, float view_scale) {
+  return (Vector2){
+    (screen_position.x - view_offset.x) / view_scale,
+    (screen_position.y - view_offset.y) / view_scale,
+  };
 }
 
 bool IsKanaCodepoint(int codepoint) {
@@ -524,6 +524,42 @@ void RenderBloomPass(
 
 GlyphEntity** glyph_entities;
 
+void ApplyImpulseToGlyphEntities(GlyphEntity** entities, Utf32SV* lines, size_t count, b2Vec2 target, float coefficient) {
+  if (!entities || !lines) {
+    return;
+  }
+
+  for (size_t i = 0; i < count; ++i) {
+    if (!entities[i]) {
+      continue;
+    }
+
+    for (size_t j = 0; j < lines[i].length; ++j) {
+      if (B2_IS_NULL(entities[i][j].body_id)) {
+        continue;
+      }
+
+      b2Vec2 body_pos    = b2Body_GetPosition(entities[i][j].body_id);
+      b2Vec2 to_target   = (b2Vec2){target.x - body_pos.x, target.y - body_pos.y};
+      float  distance_sq = to_target.x * to_target.x + to_target.y * to_target.y;
+      if (distance_sq > 0.0001f) {
+        float  distance  = sqrtf(distance_sq);
+        b2Vec2 direction = {
+          to_target.x / distance,
+          to_target.y / distance,
+        };
+
+        float  attenuation   = 1.0f / (1.0f + distance_sq * 2.0f);
+        b2Vec2 final_impulse = {
+          direction.x * coefficient * attenuation,
+          direction.y * coefficient * attenuation,
+        };
+        b2Body_ApplyLinearImpulse(entities[i][j].body_id, final_impulse, body_pos, true);
+      }
+    }
+  }
+}
+
 void DrawAnim(Utf32SV text) {
   const int           screen_width         = 1280;
   const int           screen_height        = 720;
@@ -672,6 +708,16 @@ void DrawAnim(Utf32SV text) {
 
     if (IsKeyPressed(KEY_SPACE)) {
       running = !running;
+    }
+
+    if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
+      Vector2 mouse_pos_view  = ScreenToViewVec2(GetMousePosition(), view_offset, view_scale);
+      b2Vec2  mouse_pos_world = ScreenToWorldVec2(mouse_pos_view);
+      ApplyImpulseToGlyphEntities(
+        glyph_entities,
+        &lines[1], line_count - 1,
+        mouse_pos_world,
+        s_gravity_gun_force);
     }
 
     BeginTextureMode(render_texture);
